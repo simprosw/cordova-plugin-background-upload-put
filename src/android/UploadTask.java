@@ -332,15 +332,34 @@ public final class UploadTask extends Worker {
         // Build URL
         HttpUrl url = Objects.requireNonNull(HttpUrl.parse(getInputData().getString(KEY_INPUT_URL))).newBuilder().build();
 
+        // Headers from the payload; a given Content-Type replaces the type from the file extension
+        final Request.Builder requestBuilder = new Request.Builder().url(url);
+        String contentType = null;
+        final String[] headerNames = getInputData().getStringArray(KEY_INPUT_HEADERS_NAMES);
+        if (headerNames != null) {
+            for (int i = 0; i < headerNames.length; i++) {
+                final Object value = getInputData().getKeyValueMap().get(KEY_INPUT_HEADER_VALUE_PREFIX + i);
+                if (headerNames[i] == null || value == null) {
+                    continue;
+                }
+                if ("Content-Type".equalsIgnoreCase(headerNames[i])) {
+                    contentType = String.valueOf(value);
+                } else {
+                    requestBuilder.header(headerNames[i], String.valueOf(value));
+                }
+            }
+        }
+
         // Build file reader
-        String extension = MimeTypeMap.getFileExtensionFromUrl(filepath);
         MediaType mediaType;
-        if (extension.equals("json")) {
-            // Does not support devices less than Android 10 (Stop Execution)
-            // https://stackoverflow.com/questions/44667125/getmimetypefromextension-returns-null-when-i-pass-json-as-extension
-            mediaType = MediaType.parse(MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) + "; charset=utf-8");
+        if (contentType == null) {
+            mediaType = mediaTypeFromExtension(filepath);
         } else {
-            mediaType = MediaType.parse(MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension));
+            mediaType = MediaType.parse(contentType);
+            if (mediaType == null) {
+                // OkHttp cannot parse it, so it goes as given; a body with no type adds no second header
+                requestBuilder.header("Content-Type", contentType);
+            }
         }
 
         InputStream inputStream;
@@ -361,10 +380,19 @@ public final class UploadTask extends Worker {
 
         ProgressRequestBody fileRequestBody = new ProgressRequestBody(mediaType, fileLength, inputStream, this::handleProgress);
 
-        return new Request.Builder()
-                .url(url)
+        return requestBuilder
                 .put(fileRequestBody)
                 .build();
+    }
+
+    private static MediaType mediaTypeFromExtension(final String filepath) {
+        String extension = MimeTypeMap.getFileExtensionFromUrl(filepath);
+        if (extension.equals("json")) {
+            // Does not support devices less than Android 10 (Stop Execution)
+            // https://stackoverflow.com/questions/44667125/getmimetypefromextension-returns-null-when-i-pass-json-as-extension
+            return MediaType.parse(MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) + "; charset=utf-8");
+        }
+        return MediaType.parse(MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension));
     }
 
     private long getFileSize(Uri uri, ContentResolver contentResolver) {
